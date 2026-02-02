@@ -1,4 +1,4 @@
 django
 djangorestframework
 gunicorn
-mnmpy
+
