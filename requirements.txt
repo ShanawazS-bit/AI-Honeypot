@@ -1,8 +1,4 @@
-vosk
-opensmile
-numpy
-sentence-transformers
-sounddevice
 django
 djangorestframework
 gunicorn
+mnmpy
