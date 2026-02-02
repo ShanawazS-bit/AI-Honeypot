@@ -41,6 +41,15 @@ class HoneypotEndpoint(APIView):
     """
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
+    def get(self, request):
+        """
+        Health Check for Browser Access.
+        """
+        return Response({
+            "status": "online", 
+            "message": "Honeypot API is running. Send POST requests to this endpoint for scam detection."
+        })
+
     def post(self, request):
         api_key = request.headers.get("x-api-key")
         print(f"Headers: {request.headers}")
