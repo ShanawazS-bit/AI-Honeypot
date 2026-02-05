@@ -1,1 +1,1 @@
-web: gunicorn honeypot_site.wsgi:application --log-file -
+web: gunicorn honeypot_site.wsgi:application --timeout 120 --log-file -
