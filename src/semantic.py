@@ -2,6 +2,10 @@ from typing import List, Dict
 import numpy as np
 from .models import SemanticIntent
 
+import os
+# Fix for Railway Read-Only File System
+os.environ["HF_HOME"] = "/tmp"
+
 try:
     from sentence_transformers import SentenceTransformer, util
     TRANSFORMER_AVAILABLE = True
