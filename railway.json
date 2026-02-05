@@ -1,7 +1,7 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt && python download_model.py"
+    "buildCommand": "pip install -r requirements.txt"
   },
   "deploy": {
     "startCommand": "gunicorn honeypot_site.wsgi:application --workers 1 --preload --timeout 120 --log-file -",
