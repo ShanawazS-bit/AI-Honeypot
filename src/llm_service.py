@@ -20,19 +20,39 @@ class GeminiService:
         try:
             genai.configure(api_key=api_key)
             
-            # Use gemini-2.0-flash (Confirmed available in user's model list)
-            model_name = 'gemini-2.0-flash'
-            try:
-                self.model = genai.GenerativeModel(model_name)
-                print(f"[Gemini] Initialized with {model_name}")
-            except Exception as e:
-                print(f"[Gemini] Failed to init {model_name} ({e}), falling back to gemini-pro-latest")
+            # Auto-healing Model Selection
+            # Iterates through preferred models to find one that is both AVAILABLE and HAS QUOTA
+            preferred_models = [
+                'gemini-2.0-flash',  # Fast, smart
+                'gemini-1.5-flash',  # Stable standard
+                'gemini-1.5-pro',    # High intelligence
+                'gemini-pro',        # Legacy stable
+                'gemini-1.0-pro'     # Deep legacy
+            ]
+            
+            self.model = None
+            
+            print("--- STARTING MODEL SELECTION ---")
+            for model_name in preferred_models:
                 try:
-                    self.model = genai.GenerativeModel('gemini-pro-latest')
-                    print("[Gemini] Fallback to gemini-pro-latest successful")
-                except Exception as e2:
-                    print(f"[Gemini] Fallback failed: {e2}")
-                    self.model = None
+                    print(f"[Gemini] Testing model: {model_name}...")
+                    candidate_model = genai.GenerativeModel(model_name)
+                    
+                    # CRITICAL: Verify it actually works (catches 404 AND 429)
+                    # We generate a tiny token to prove we have access and quota.
+                    candidate_model.generate_content("test")
+                    
+                    self.model = candidate_model
+                    print(f"[Gemini] ✅ SUCCESS! Switched to {model_name}")
+                    break
+                except Exception as e:
+                    print(f"[Gemini] ⚠️ Failed {model_name}: {e}")
+                    continue
+            
+            if self.model is None:
+                print("[Gemini] ❌ ALL MODELS FAILED. Using Keyword Fallback.")
+                # self.model remains None, forcing fallback in generate_response
+            print("--------------------------------")
 
             # Session cache to avoid sending full persona every time
             self.session_cache = {}
