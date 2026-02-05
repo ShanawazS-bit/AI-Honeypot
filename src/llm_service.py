@@ -20,6 +20,16 @@ class GeminiService:
         try:
             genai.configure(api_key=api_key)
             
+            # DEBUG: List available models to find the correct name
+            print("--- AVAILABLE GEMINI MODELS ---")
+            try:
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        print(f"Model: {m.name}")
+            except Exception as e:
+                print(f"Error listing models: {e}")
+            print("-------------------------------")
+
             # Try initializing with gemini-pro (stable)
             model_name = 'gemini-pro'
             try:
