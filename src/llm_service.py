@@ -24,10 +24,17 @@ class GeminiService:
             model_name = 'gemini-1.5-flash'
             try:
                 self.model = genai.GenerativeModel(model_name)
+                # Test generation to fail fast if model not found
+                # self.model.generate_content("test") 
                 print(f"[Gemini] Initialized with {model_name}")
-            except Exception:
-                print(f"[Gemini] Failed to init {model_name}, falling back to gemini-pro")
-                self.model = genai.GenerativeModel('gemini-pro')
+            except Exception as e:
+                print(f"[Gemini] Failed to init {model_name} ({e}), falling back to gemini-pro")
+                try:
+                    self.model = genai.GenerativeModel('gemini-pro')
+                    print("[Gemini] Fallback to gemini-pro successful")
+                except Exception as e2:
+                    print(f"[Gemini] Fallback failed: {e2}")
+                    self.model = None
 
             # Session cache to avoid sending full persona every time
             self.session_cache = {}
