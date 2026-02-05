@@ -141,7 +141,7 @@ class HoneypotEndpoint(APIView):
             elif intent.label == "AUTHORITY":
                 reply = "Oh, from the headquarters? I didn't know there was an issue."
             elif intent.label == "FEAR":
-                reply = "Oh my god, am I in trouble? Please don't arrest me!"
+                reply = "Oh my god, am I in trouble? I am very scared!"
             elif intent.label == "URGENCY":
                 reply = "I'm trying to find my glasses, please wait a moment... don't rush me."
             elif intent.label == "PAYMENT":
