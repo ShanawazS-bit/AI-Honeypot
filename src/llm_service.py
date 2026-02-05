@@ -20,24 +20,19 @@ class GeminiService:
         try:
             genai.configure(api_key=api_key)
             
-            # DEBUG: List available models to find the correct name
-            print("--- AVAILABLE GEMINI MODELS ---")
-            try:
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        print(f"Model: {m.name}")
-            except Exception as e:
-                print(f"Error listing models: {e}")
-            print("-------------------------------")
-
-            # Try initializing with gemini-pro (stable)
-            model_name = 'gemini-pro'
+            # Use gemini-2.0-flash (Confirmed available in user's model list)
+            model_name = 'gemini-2.0-flash'
             try:
                 self.model = genai.GenerativeModel(model_name)
                 print(f"[Gemini] Initialized with {model_name}")
             except Exception as e:
-                print(f"[Gemini] Failed to init {model_name}: {e}")
-                self.model = None
+                print(f"[Gemini] Failed to init {model_name} ({e}), falling back to gemini-pro-latest")
+                try:
+                    self.model = genai.GenerativeModel('gemini-pro-latest')
+                    print("[Gemini] Fallback to gemini-pro-latest successful")
+                except Exception as e2:
+                    print(f"[Gemini] Fallback failed: {e2}")
+                    self.model = None
 
             # Session cache to avoid sending full persona every time
             self.session_cache = {}
