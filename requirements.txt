@@ -5,3 +5,4 @@ djangorestframework
 gunicorn
 requests
 google-generativeai
+python-dotenv

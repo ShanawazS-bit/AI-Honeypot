@@ -19,8 +19,16 @@ class GeminiService:
             
         try:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
             
+            # Try initializing with the preferred model, fallback if needed
+            model_name = 'gemini-1.5-flash'
+            try:
+                self.model = genai.GenerativeModel(model_name)
+                print(f"[Gemini] Initialized with {model_name}")
+            except Exception:
+                print(f"[Gemini] Failed to init {model_name}, falling back to gemini-pro")
+                self.model = genai.GenerativeModel('gemini-pro')
+
             # Session cache to avoid sending full persona every time
             self.session_cache = {}
             
