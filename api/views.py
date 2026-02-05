@@ -101,8 +101,8 @@ class HoneypotEndpoint(APIView):
                  gemini_service = None
 
         if gemini_service:
-             # Try dynamic response
-             reply = gemini_service.generate_response(text_input, history, "UNKNOWN") # Risk unknown initially
+             # Try dynamic response with session awareness
+             reply = gemini_service.generate_response(text_input, history, "UNKNOWN", session_id=session_id)
         
         # 2. Background Processing (Intelligence Extraction + Callback)
         def process_background(session_id, text_input, history):
