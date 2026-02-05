@@ -86,58 +86,107 @@ class HoneypotEndpoint(APIView):
         
         print(f"Processing Session: {session_id}, Input: '{text_input}'")
         
-        # --- Logic Core (AI Pipeline) ---
+        # --- Logic Core ---
         
-        # 1. Semantic Analysis
-        # Use the global analyzer instance if available, otherwise fallback
-        global sem_analyzer
-        if sem_analyzer is None:
-             # Lazy load if not ready (though it should be loaded at module level)
-             from src.semantic import SemanticAnalyzer
-             sem_analyzer = SemanticAnalyzer()
-
-        intent = sem_analyzer.analyze(text_input)
-        print(f"  » Intent: {intent.label} ({intent.confidence:.2f})")
+        # 1. Try Gemini (LLM) First - FAST PATH
+        print(f"headers: {request.headers}")
         
-        # 2. Sequencing & Scoring
-        # We need to reconstruct or approximate state since we are stateless.
-        # For this hackathon demo, we will use a fresh state populated with history logic if needed,
-        # or just simply check the current frame's risk.
-        
-        from src.models import CallState, ParalinguisticFeatures
-        from src.sequencer import BehavioralSequencer
-        from src.scorer import FraudRiskScorer
-        
-        # Initialize helper components on the fly (lightweight)
-        sequencer = BehavioralSequencer()
-        scorer = FraudRiskScorer()
-        
-        # Create a transient CallState
-        call_state = CallState(call_id=session_id)
-        
-        # approximate current phase based on intent
-        new_phase = sequencer.update_state(call_state, intent)
-        
-        # Calculate Risk (Mocking paralinguistics as we only have text)
-        dummy_para = ParalinguisticFeatures() # Defaults to 0
-        risk_score = scorer.calculate_score(call_state, dummy_para, intent)
-        
-        print(f"  » Risk Score: {risk_score.score:.2f} [{risk_score.level}]")
-        
-        # 3. Agent Response Generation (Hybrid: LLM -> Semantic Fallback)
+        reply = None
         global gemini_service
         if gemini_service is None:
-             from src.llm_service import GeminiService
-             gemini_service = GeminiService()
-             
-        # Try dynamic response
-        reply = gemini_service.generate_response(text_input, history, risk_score.level)
+             try:
+                 from src.llm_service import GeminiService
+                 gemini_service = GeminiService()
+             except Exception as e:
+                 print(f"Failed to load LLM Service: {e}")
+                 gemini_service = None
+
+        if gemini_service:
+             # Try dynamic response
+             reply = gemini_service.generate_response(text_input, history, "UNKNOWN") # Risk unknown initially
         
+        # 2. Background Processing (Heavy Lifting)
+        # We spawn a thread to do Semantic Analysis + Callback so we don't block the User Response
+        def process_background(session_id, text_input, history, intent_label=None):
+            global sem_analyzer
+            if sem_analyzer is None:
+                 from src.semantic import SemanticAnalyzer
+                 sem_analyzer = SemanticAnalyzer()
+            
+            # Analyze Deeply
+            intent = sem_analyzer.analyze(text_input)
+            print(f"  [Background] Intent: {intent.label} ({intent.confidence:.2f})")
+            
+            # Intelligence Extraction (Regex + Semantic)
+            intelligence = {
+                "bankAccounts": set(),
+                "upiIds": set(),
+                "phishingLinks": set(),
+                "phoneNumbers": set(),
+                "suspiciousKeywords": set(intent.keywords_detected)
+            }
+            
+            full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
+            
+            phone_pattern = r"(\+91[\-\s]?)?[6-9]\d{9}"
+            upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
+            url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
+            acc_pattern = r"\b\d{9,18}\b" 
+
+            intelligence["phoneNumbers"].update(re.findall(phone_pattern, full_text))
+            intelligence["upiIds"].update(re.findall(upi_pattern, full_text))
+            intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
+            intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
+            
+            scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp"]
+            for kw in scam_keywords:
+                if kw in full_text.lower():
+                    intelligence["suspiciousKeywords"].add(kw)
+
+            # Fire Callback if suspicious
+            if intelligence["suspiciousKeywords"] or intent.label in ["PAYMENT", "URGENCY", "FEAR"]:
+                 total_messages = len(history) + 1
+                 run_callback(session_id, intelligence, total_messages)
+
+        # Start Background Task
+        t = threading.Thread(target=process_background, args=(session_id, text_input, history))
+        t.daemon = True # Allow main program to exit even if thread is running
+        t.start()
+
+        # 3. Fallback Response (If Gemini Failed) - Slow Path
+        debug_intent = "UNKNOWN"
+        debug_risk = "UNKNOWN"
+
         if reply is None:
-            # Fallback to Semantic Templates if LLM fails (Rate Limit, etc.)
-            print("  » LLM failed, using Semantic Fallback.")
+            print("  » Gemini failed/skipped. Waiting for Semantic Analysis (Blocking)...")
+            # We strictly need to wait for semantic analysis here to generate a fallback reply
+            # But the user wants speed. We will use a regex-based lightweight fallback for speed if possible,
+            # Or accept the blocking hit only when Gemini fails.
+            
+            # Re-run semantic logic inline only if we absolutely need it for the reply
+            global sem_analyzer
+            if sem_analyzer is None:
+                 from src.semantic import SemanticAnalyzer
+                 sem_analyzer = SemanticAnalyzer()
+            intent = sem_analyzer.analyze(text_input) # This loads the model (Slow)
+            debug_intent = intent.label
+
+            # Re-calculate risk for fallback if needed (not explicitly in instruction, but good practice)
+            from src.models import CallState, ParalinguisticFeatures
+            from src.sequencer import BehavioralSequencer
+            from src.scorer import FraudRiskScorer
+            sequencer = BehavioralSequencer()
+            scorer = FraudRiskScorer()
+            call_state = CallState(call_id=session_id)
+            sequencer.update_state(call_state, intent)
+            dummy_para = ParalinguisticFeatures()
+            risk_score = scorer.calculate_score(call_state, dummy_para, intent)
+            debug_risk = risk_score.level
+            
+            lower_input = text_input.lower()
             if intent.label == "GREETING":
                 reply = "Hello? Who is this calling?"
+            # ... (Rest of fallback logic matches existing)
             elif intent.label == "AUTHORITY":
                 reply = "Oh, from the headquarters? I didn't know there was an issue."
             elif intent.label == "FEAR":
@@ -147,52 +196,19 @@ class HoneypotEndpoint(APIView):
             elif intent.label == "PAYMENT":
                 reply = "My grandson usually handles the money. Which card do you need? The blue one?"
             elif intent.label == "NEUTRAL":
-                reply = "I didn't quite catch that. What did you say?"
+                if "otp" in lower_input:
+                    reply = "I didn't receive any OTP. Can you send it again?"
+                elif "bank" in lower_input:
+                    reply = "Oh no! My account is in which bank? I have many."
+                else:
+                    reply = "I didn't quite catch that. What did you say?"
             else:
                 reply = "I am a bit confused, could you explain that?"
 
-        print(f"  » Agent Reply: {reply}")
-
-        # 4. Intelligence Extraction (Regex + Semantic)
-        intelligence = {
-            "bankAccounts": set(),
-            "upiIds": set(),
-            "phishingLinks": set(),
-            "phoneNumbers": set(),
-            "suspiciousKeywords": set(intent.keywords_detected)
-        }
-        
-        # Combine current input and history for full context extraction
-        full_text = text_input + " " + " ".join([str(m.get("text", "")) for m in history])
-        
-        # Regex Patterns (Restored)
-        phone_pattern = r"(\+91[\-\s]?)?[6-9]\d{9}"
-        upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
-        url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
-        acc_pattern = r"\b\d{9,18}\b" 
-
-        intelligence["phoneNumbers"].update(re.findall(phone_pattern, full_text))
-        intelligence["upiIds"].update(re.findall(upi_pattern, full_text))
-        intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
-        intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
-        
-        # Add high risk intent labels as keywords too
-        if intent.label != "NEUTRAL":
-             intelligence["suspiciousKeywords"].add(intent.label)
-
-        # 5. Callback Handling
-        # If risk is high or we detected scam patterns, send callback
-        if risk_score.level in ["HIGH", "CRITICAL"] or intent.label in ["PAYMENT", "URGENCY", "FEAR"]:
-             total_messages = len(history) + 1
-             # Fire and forget callback
-             t = threading.Thread(target=run_callback, args=(session_id, intelligence, total_messages))
-             t.daemon = True
-             t.start()
-
-        # 6. Response
+        # 4. Response
         return Response({
             "status": "success",
             "reply": reply,
-            "debug_intent": intent.label,
-            "debug_risk": risk_score.level
+            "debug_intent": debug_intent,
+            "debug_risk": debug_risk
         })

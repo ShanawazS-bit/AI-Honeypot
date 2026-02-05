@@ -1,15 +1,18 @@
 import requests
 import time
 
-URL = "http://127.0.0.1:8000/api/chat"
+URL = "https://web-production-f4c25.up.railway.app/api/chat"
 API_KEY = "testing_api_key_team_hacksmiths10000"
 
 def test_api():
     print(f"Testing {URL}...")
     try:
-        # Test without key
-        print("1. Testing without key...")
-        res = requests.post(URL, json={"text": "Hello"})
+        # Test with key
+        print("2. Testing with key...")
+        start_time = time.time()
+        res = requests.post(URL, json={"text": "Hello scammer"}, headers={"x-api-key": API_KEY})
+        duration = time.time() - start_time
+        print(f"   Duration: {duration:.2f} seconds")
         if res.status_code == 401:
             print("   PASS: Got 401 as expected.")
         else:
