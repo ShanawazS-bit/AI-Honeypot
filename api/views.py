@@ -148,25 +148,36 @@ class HoneypotEndpoint(APIView):
         debug_risk = "UNKNOWN"
 
         if reply is None:
-            print("  » Gemini failed/skipped. Using keyword fallback.")
+            print("  » Gemini failed/skipped. Using intelligent keyword fallback.")
             
             lower_input = text_input.lower()
             
-            # Simple keyword-based fallback
-            if any(word in lower_input for word in ["hello", "hi", "hey"]):
-                reply = "Hello? Who is this calling?"
-            elif any(word in lower_input for word in ["police", "officer", "authority", "government"]):
-                reply = "Oh, from the headquarters? I didn't know there was an issue."
-            elif any(word in lower_input for word in ["arrest", "jail", "legal", "court"]):
-                reply = "Oh my god, am I in trouble? I am very scared!"
-            elif any(word in lower_input for word in ["urgent", "immediately", "now", "quick"]):
-                reply = "I'm trying to find my glasses, please wait a moment... don't rush me."
-            elif any(word in lower_input for word in ["pay", "money", "account", "card", "upi", "bank"]):
-                reply = "My grandson usually handles the money. Which card do you need? The blue one?"
-            elif "otp" in lower_input:
-                reply = "I didn't receive any OTP. Can you send it again?"
+            # Intelligent keyword-based fallback with questions
+            if any(word in lower_input for word in ["hello", "hi", "hey", "good morning", "good evening"]):
+                reply = "Hello beta... who is this? Why you are calling me?"
+            elif any(word in lower_input for word in ["police", "officer", "authority", "government", "department"]):
+                reply = "Oh god, police? What happened? What is your name and badge number?"
+            elif any(word in lower_input for word in ["arrest", "jail", "legal", "court", "case"]):
+                reply = "Arrest? Oh my god I am very scared! What I did wrong? Should I call my son?"
+            elif any(word in lower_input for word in ["urgent", "immediately", "now", "quick", "hurry"]):
+                reply = "Wait wait, I am old person... what is so urgent? Tell me slowly please."
+            elif any(word in lower_input for word in ["block", "suspend", "freeze", "deactivate"]):
+                reply = "My account is block? Which bank? How to fix it? You have customer care number?"
+            elif any(word in lower_input for word in ["kyc", "verify", "verification", "update"]):
+                reply = "KYC? What is that? My son did all this when opening account... what I need to do?"
+            elif any(word in lower_input for word in ["pay", "money", "amount", "rupees", "payment"]):
+                reply = "Pay money? How much? Where to send? I don't know how to do online payment..."
+            elif any(word in lower_input for word in ["account", "card", "upi", "bank"]):
+                reply = "Which account you are talking? I have SBI and HDFC... which one?"
+            elif any(word in lower_input for word in ["otp", "code", "password", "pin"]):
+                reply = "OTP? You mean the number message? I didn't get any... where it will come?"
+            elif any(word in lower_input for word in ["link", "download", "install", "app"]):
+                reply = "Download what? I don't know how to download... can you tell my son? What is the name?"
+            elif any(word in lower_input for word in ["name", "who", "speaking"]):
+                reply = "Haan I am here... but who are you? Which company you calling from?"
             else:
-                reply = "I didn't quite catch that. What did you say?"
+                # Even the catch-all should ask a question
+                reply = "Sorry beta, I didn't understand properly... can you repeat? Who is calling?"
 
         # 4. Response
         return Response({

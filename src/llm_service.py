@@ -184,7 +184,8 @@ class GeminiService:
         Dynamically adapts to context extracted from scammer's messages.
         """
         if not self.model:
-            return "I am having trouble with my phone... can you hear me?"
+            print("[Gemini] ERROR: Model not initialized. Check GEMINI_API_KEY environment variable.")
+            return None
 
         try:
             # Check if this is a new session
@@ -274,12 +275,14 @@ IMPORTANT: Use any names/details they provided about you in your response!
             # Remove any quotation marks that Gemini might add
             generated_text = generated_text.strip('"').strip("'")
             
-            print(f"[Gemini] Generated response ({len(generated_text)} chars) for session {session_id}")
+            print(f"[Gemini] ✓ Generated response ({len(generated_text)} chars) for session {session_id}")
             if context_hints:
                 print(f"[Gemini] Context used: {', '.join(context_hints[:2])}")
             
             return generated_text
             
         except Exception as e:
-            print(f"[Gemini] Generation failed: {e}")
+            print(f"[Gemini] ✗ Generation failed: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
