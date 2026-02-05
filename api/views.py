@@ -7,6 +7,10 @@ import requests
 import re
 import threading
 
+# Global Semantic Analyzer for Lazy Loading
+sem_analyzer = None
+gemini_service = None
+
 def run_callback(session_id, intelligence, messages_count):
     """
     Sends the mandatory callback to GUVI evaluation endpoint.
@@ -82,67 +86,97 @@ class HoneypotEndpoint(APIView):
         
         print(f"Processing Session: {session_id}, Input: '{text_input}'")
         
-        # --- Logic Core ---
+        # --- Logic Core (AI Pipeline) ---
         
-        # 1. Intelligence Extraction (Regex / Keywords)
+        # 1. Semantic Analysis
+        # Use the global analyzer instance if available, otherwise fallback
+        global sem_analyzer
+        if sem_analyzer is None:
+             # Lazy load if not ready (though it should be loaded at module level)
+             from src.semantic import SemanticAnalyzer
+             sem_analyzer = SemanticAnalyzer()
+
+        intent = sem_analyzer.analyze(text_input)
+        print(f"  » Intent: {intent.label} ({intent.confidence:.2f})")
+        
+        # 2. Sequencing & Scoring
+        # We need to reconstruct or approximate state since we are stateless.
+        # For this hackathon demo, we will use a fresh state populated with history logic if needed,
+        # or just simply check the current frame's risk.
+        
+        from src.models import CallState, ParalinguisticFeatures
+        from src.sequencer import BehavioralSequencer
+        from src.scorer import FraudRiskScorer
+        
+        # Initialize helper components on the fly (lightweight)
+        sequencer = BehavioralSequencer()
+        scorer = FraudRiskScorer()
+        
+        # Create a transient CallState
+        call_state = CallState(call_id=session_id)
+        
+        # approximate current phase based on intent
+        new_phase = sequencer.update_state(call_state, intent)
+        
+        # Calculate Risk (Mocking paralinguistics as we only have text)
+        dummy_para = ParalinguisticFeatures() # Defaults to 0
+        risk_score = scorer.calculate_score(call_state, dummy_para, intent)
+        
+        print(f"  » Risk Score: {risk_score.score:.2f} [{risk_score.level}]")
+        
+        # 3. Agent Response Generation (Hybrid: LLM -> Semantic Fallback)
+        global gemini_service
+        if gemini_service is None:
+             from src.llm_service import GeminiService
+             gemini_service = GeminiService()
+             
+        # Try dynamic response
+        reply = gemini_service.generate_response(text_input, history, risk_score.level)
+        
+        if reply is None:
+            # Fallback to Semantic Templates if LLM fails (Rate Limit, etc.)
+            print("  » LLM failed, using Semantic Fallback.")
+            if intent.label == "GREETING":
+                reply = "Hello? Who is this calling?"
+            elif intent.label == "AUTHORITY":
+                reply = "Oh, from the headquarters? I didn't know there was an issue."
+            elif intent.label == "FEAR":
+                reply = "Oh my god, am I in trouble? Please don't arrest me!"
+            elif intent.label == "URGENCY":
+                reply = "I'm trying to find my glasses, please wait a moment... don't rush me."
+            elif intent.label == "PAYMENT":
+                reply = "My grandson usually handles the money. Which card do you need? The blue one?"
+            elif intent.label == "NEUTRAL":
+                reply = "I didn't quite catch that. What did you say?"
+            else:
+                reply = "I am a bit confused, could you explain that?"
+
+        print(f"  » Agent Reply: {reply}")
+
+        # 4. Intelligence Extraction (for Callback)
+        # We map the semantic intent/keywords to the output format
+        
         intelligence = {
-            "bankAccounts": set(),
-            "upiIds": set(),
-            "phishingLinks": set(),
-            "phoneNumbers": set(),
-            "suspiciousKeywords": set()
+            "bankAccounts": [],
+            "upiIds": [],
+            "phishingLinks": [],
+            "phoneNumbers": [],
+            "suspiciousKeywords": intent.keywords_detected
         }
-        
-        full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
-        
-        # Regex Patterns
-        phone_pattern = r"(\+91[\-\s]?)?[6-9]\d{9}"
-        upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
-        url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
-        acc_pattern = r"\b\d{9,18}\b" 
 
-        intelligence["phoneNumbers"].update(re.findall(phone_pattern, full_text))
-        intelligence["upiIds"].update(re.findall(upi_pattern, full_text))
-        intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
-        intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
-        
-        scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp"]
-        for kw in scam_keywords:
-            if kw in full_text.lower():
-                intelligence["suspiciousKeywords"].add(kw)
-
-        # 2. Agent Response Generation
-        # Simple persona logic or use the existing HoneypotAgent logic if compatible.
-        # For reliability, let's use a simple robust response generator based on keywords.
-        
-        reply = "I am confused. Why do I need to do this?"
-        lower_input = text_input.lower()
-        
-        if "otp" in lower_input:
-            reply = "I didn't receive any OTP. Can you send it again?"
-        elif "bank" in lower_input or "account" in lower_input:
-            reply = "Oh no! My account is in which bank? I have many."
-        elif "upi" in lower_input:
-            reply = "I don't know my UPI ID. Is it on the card?"
-        elif "link" in lower_input:
-            reply = "I am scared to click links. Can you tell me the website name?"
-        elif "urgent" in lower_input:
-            reply = "Please don't rush me, I am an old person. What should I do?"
-            
-        # 3. Callback Handling
-        # The prompt says: "When Should This Be Sent? ... After Scam intent is confirmed ... engagement is finished"
-        # Since we are request-response, we might strictly trigger it on every defined "scam" message 
-        # OR we assume every request is a step.
-        # To be safe and compliant, we will fire the callback asynchronously for every request that looks like a scam.
-        
-        total_messages = len(history) + 1
-        if intelligence["suspiciousKeywords"]:
+        # 5. Callback Handling
+        # If risk is high or we detected scam patterns, send callback
+        if risk_score.level in ["HIGH", "CRITICAL"] or intent.label in ["PAYMENT", "URGENCY", "FEAR"]:
+             total_messages = len(history) + 1
              # Fire and forget callback
              t = threading.Thread(target=run_callback, args=(session_id, intelligence, total_messages))
+             t.daemon = True
              t.start()
 
-        # 4. Response
+        # 6. Response
         return Response({
             "status": "success",
-            "reply": reply
+            "reply": reply,
+            "debug_intent": intent.label,
+            "debug_risk": risk_score.level
         })

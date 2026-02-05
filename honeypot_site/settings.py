@@ -123,3 +123,7 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Application Settings
+HONEYPOT_API_KEY = "testing_api_key_team_hacksmiths10000"
+GEMINI_API_KEY = "AIzaSyDvV5mU9z-yPbMcefCPOiGX4WZp7HeyT7E"
