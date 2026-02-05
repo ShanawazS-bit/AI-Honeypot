@@ -153,16 +153,32 @@ class HoneypotEndpoint(APIView):
 
         print(f"  » Agent Reply: {reply}")
 
-        # 4. Intelligence Extraction (for Callback)
-        # We map the semantic intent/keywords to the output format
-        
+        # 4. Intelligence Extraction (Regex + Semantic)
         intelligence = {
-            "bankAccounts": [],
-            "upiIds": [],
-            "phishingLinks": [],
-            "phoneNumbers": [],
-            "suspiciousKeywords": intent.keywords_detected
+            "bankAccounts": set(),
+            "upiIds": set(),
+            "phishingLinks": set(),
+            "phoneNumbers": set(),
+            "suspiciousKeywords": set(intent.keywords_detected)
         }
+        
+        # Combine current input and history for full context extraction
+        full_text = text_input + " " + " ".join([str(m.get("text", "")) for m in history])
+        
+        # Regex Patterns (Restored)
+        phone_pattern = r"(\+91[\-\s]?)?[6-9]\d{9}"
+        upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
+        url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
+        acc_pattern = r"\b\d{9,18}\b" 
+
+        intelligence["phoneNumbers"].update(re.findall(phone_pattern, full_text))
+        intelligence["upiIds"].update(re.findall(upi_pattern, full_text))
+        intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
+        intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
+        
+        # Add high risk intent labels as keywords too
+        if intent.label != "NEUTRAL":
+             intelligence["suspiciousKeywords"].add(intent.label)
 
         # 5. Callback Handling
         # If risk is high or we detected scam patterns, send callback
