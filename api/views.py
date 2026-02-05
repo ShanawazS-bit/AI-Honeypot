@@ -94,8 +94,8 @@ class HoneypotEndpoint(APIView):
         global gemini_service
         if gemini_service is None:
              try:
-                 from src.llm_service import GeminiService
-                 gemini_service = GeminiService()
+                 from src.llm_service import LLMService
+                 gemini_service = LLMService()
              except Exception as e:
                  print(f"Failed to load LLM Service: {e}")
                  gemini_service = None
@@ -117,15 +117,39 @@ class HoneypotEndpoint(APIView):
             
             full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
             
-            phone_pattern = r"(\+91[\-\s]?)?[6-9]\d{9}"
+            # Improved Regex Patterns (Non-capturing groups for optional parts)
+            # 1. Use word boundaries to avoid matching substrings inside other numbers
+            # 2. (?<!\d) ensures we don't match inside a larger number
+            phone_pattern = r"(?:(?:\+91[\-\s]?)|(?<!\d))[6-9]\d{9}\b"
             upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
             url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
             acc_pattern = r"\b\d{9,18}\b" 
 
-            intelligence["phoneNumbers"].update(re.findall(phone_pattern, full_text))
-            intelligence["upiIds"].update(re.findall(upi_pattern, full_text))
-            intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
-            intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
+            found_phones = set(re.findall(phone_pattern, full_text))
+            found_upis = set(re.findall(upi_pattern, full_text))
+            found_links = set(re.findall(url_pattern, full_text))
+            found_accounts = set(re.findall(acc_pattern, full_text))
+            
+            # Filter: Remove phone numbers from bank accounts
+            # If an account number is exactly a phone number, remove it.
+            # Also remove if the account number is a substring of a found phone number (unlikely but safe)
+            clean_accounts = set()
+            for acc in found_accounts:
+                # Check if this account is actually a phone number (or part of one)
+                is_phone = False
+                for ph in found_phones:
+                    # If acc is present in ph (substring), it's likely the same number
+                    if acc in ph:
+                        is_phone = True
+                        break
+                
+                if not is_phone:
+                     clean_accounts.add(acc)
+            
+            intelligence["phoneNumbers"].update(found_phones)
+            intelligence["upiIds"].update(found_upis)
+            intelligence["phishingLinks"].update(found_links)
+            intelligence["bankAccounts"].update(clean_accounts)
             
             scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp",
                              "arrest", "police", "legal", "pay", "account", "upi", "bank", "card"]
@@ -154,7 +178,7 @@ class HoneypotEndpoint(APIView):
             
             # Intelligent keyword-based fallback with questions
             if any(word in lower_input for word in ["hello", "hi", "hey", "good morning", "good evening"]):
-                reply = "Hello beta... who is this? Why you are calling me?"
+                reply = "Hello... who is this? Why you are calling me?"
             elif any(word in lower_input for word in ["police", "officer", "authority", "government", "department"]):
                 reply = "Oh god, police? What happened? What is your name and badge number?"
             elif any(word in lower_input for word in ["arrest", "jail", "legal", "court", "case"]):
@@ -177,7 +201,7 @@ class HoneypotEndpoint(APIView):
                 reply = "Haan I am here... but who are you? Which company you calling from?"
             else:
                 # Even the catch-all should ask a question
-                reply = "Sorry beta, I didn't understand properly... can you repeat? Who is calling?"
+                reply = "Sorry, I didn't understand properly... can you repeat? Who is calling?"
 
         # 4. Response
         return Response({

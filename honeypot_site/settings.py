@@ -129,3 +129,4 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # SECURITY: Load from environment variables, not hardcoded!
 HONEYPOT_API_KEY = os.environ.get("HONEYPOT_API_KEY", "testing_api_key_team_hacksmiths10000")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", None)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
