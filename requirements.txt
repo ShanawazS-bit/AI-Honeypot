@@ -4,5 +4,4 @@ django
 djangorestframework
 gunicorn
 requests
-sentence-transformers
 google-generativeai

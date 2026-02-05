@@ -7,8 +7,7 @@ import requests
 import re
 import threading
 
-# Global Semantic Analyzer for Lazy Loading
-sem_analyzer = None
+# Global Gemini Service for Lazy Loading
 gemini_service = None
 
 def run_callback(session_id, intelligence, messages_count):
@@ -105,25 +104,15 @@ class HoneypotEndpoint(APIView):
              # Try dynamic response
              reply = gemini_service.generate_response(text_input, history, "UNKNOWN") # Risk unknown initially
         
-        # 2. Background Processing (Heavy Lifting)
-        # We spawn a thread to do Semantic Analysis + Callback so we don't block the User Response
-        def process_background(session_id, text_input, history, intent_label=None):
-            global sem_analyzer
-            if sem_analyzer is None:
-                 from src.semantic import SemanticAnalyzer
-                 sem_analyzer = SemanticAnalyzer()
-            
-            # Analyze Deeply
-            intent = sem_analyzer.analyze(text_input)
-            print(f"  [Background] Intent: {intent.label} ({intent.confidence:.2f})")
-            
-            # Intelligence Extraction (Regex + Semantic)
+        # 2. Background Processing (Intelligence Extraction + Callback)
+        def process_background(session_id, text_input, history):
+            # Intelligence Extraction (Regex + Keywords)
             intelligence = {
                 "bankAccounts": set(),
                 "upiIds": set(),
                 "phishingLinks": set(),
                 "phoneNumbers": set(),
-                "suspiciousKeywords": set(intent.keywords_detected)
+                "suspiciousKeywords": set()
             }
             
             full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
@@ -138,13 +127,14 @@ class HoneypotEndpoint(APIView):
             intelligence["phishingLinks"].update(re.findall(url_pattern, full_text))
             intelligence["bankAccounts"].update(re.findall(acc_pattern, full_text))
             
-            scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp"]
+            scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp",
+                             "arrest", "police", "legal", "pay", "account", "upi", "bank", "card"]
             for kw in scam_keywords:
                 if kw in full_text.lower():
                     intelligence["suspiciousKeywords"].add(kw)
 
             # Fire Callback if suspicious
-            if intelligence["suspiciousKeywords"] or intent.label in ["PAYMENT", "URGENCY", "FEAR"]:
+            if intelligence["suspiciousKeywords"] or intelligence["phoneNumbers"] or intelligence["upiIds"]:
                  total_messages = len(history) + 1
                  run_callback(session_id, intelligence, total_messages)
 
@@ -158,57 +148,28 @@ class HoneypotEndpoint(APIView):
         debug_risk = "UNKNOWN"
 
         if reply is None:
-            print("  » Gemini failed/skipped. Waiting for Semantic Analysis (Blocking)...")
-            # We strictly need to wait for semantic analysis here to generate a fallback reply
-            # But the user wants speed. We will use a regex-based lightweight fallback for speed if possible,
-            # Or accept the blocking hit only when Gemini fails.
-            
-            # Re-run semantic logic inline only if we absolutely need it for the reply
-            global sem_analyzer
-            if sem_analyzer is None:
-                 from src.semantic import SemanticAnalyzer
-                 sem_analyzer = SemanticAnalyzer()
-            intent = sem_analyzer.analyze(text_input) # This loads the model (Slow)
-            debug_intent = intent.label
-
-            # Re-calculate risk for fallback if needed (not explicitly in instruction, but good practice)
-            from src.models import CallState, ParalinguisticFeatures
-            from src.sequencer import BehavioralSequencer
-            from src.scorer import FraudRiskScorer
-            sequencer = BehavioralSequencer()
-            scorer = FraudRiskScorer()
-            call_state = CallState(call_id=session_id)
-            sequencer.update_state(call_state, intent)
-            dummy_para = ParalinguisticFeatures()
-            risk_score = scorer.calculate_score(call_state, dummy_para, intent)
-            debug_risk = risk_score.level
+            print("  » Gemini failed/skipped. Using keyword fallback.")
             
             lower_input = text_input.lower()
-            if intent.label == "GREETING":
+            
+            # Simple keyword-based fallback
+            if any(word in lower_input for word in ["hello", "hi", "hey"]):
                 reply = "Hello? Who is this calling?"
-            # ... (Rest of fallback logic matches existing)
-            elif intent.label == "AUTHORITY":
+            elif any(word in lower_input for word in ["police", "officer", "authority", "government"]):
                 reply = "Oh, from the headquarters? I didn't know there was an issue."
-            elif intent.label == "FEAR":
+            elif any(word in lower_input for word in ["arrest", "jail", "legal", "court"]):
                 reply = "Oh my god, am I in trouble? I am very scared!"
-            elif intent.label == "URGENCY":
+            elif any(word in lower_input for word in ["urgent", "immediately", "now", "quick"]):
                 reply = "I'm trying to find my glasses, please wait a moment... don't rush me."
-            elif intent.label == "PAYMENT":
+            elif any(word in lower_input for word in ["pay", "money", "account", "card", "upi", "bank"]):
                 reply = "My grandson usually handles the money. Which card do you need? The blue one?"
-            elif intent.label == "NEUTRAL":
-                if "otp" in lower_input:
-                    reply = "I didn't receive any OTP. Can you send it again?"
-                elif "bank" in lower_input:
-                    reply = "Oh no! My account is in which bank? I have many."
-                else:
-                    reply = "I didn't quite catch that. What did you say?"
+            elif "otp" in lower_input:
+                reply = "I didn't receive any OTP. Can you send it again?"
             else:
-                reply = "I am a bit confused, could you explain that?"
+                reply = "I didn't quite catch that. What did you say?"
 
         # 4. Response
         return Response({
             "status": "success",
-            "reply": reply,
-            "debug_intent": debug_intent,
-            "debug_risk": debug_risk
+            "reply": reply
         })
