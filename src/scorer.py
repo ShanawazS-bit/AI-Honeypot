@@ -47,16 +47,16 @@ class FraudRiskScorer:
         # 2. Intent-based scoring (30% weight)
         # Specific risky intents add immediate score
         if last_intent.label == "PAYMENT":
-            score += 0.5 # Huge jump
+            score += 0.8 # Immediate Escalation
             triggers.append("Payment Demand")
         elif last_intent.label in ["THREAT", "URGENCY", "FEAR", "AUTHORITY"]:
-            score += 0.2
+            score += 0.4
             triggers.append(f"High Risk Intent: {last_intent.label}")
             
         # 3. Paralinguistic-based scoring (30% weight)
         # High pitch/jitter indicates stress or artificiality
         # Normalize pitch (very rough heuristic, assuming 100-300Hz range)
-        # eGeMAPS returns semitones sometimes, but let's assume raw or normalized
+        # eGeMAPS returns semitones sometimes, but theek hai assuming raw or normalized
         # We'll use the 'jitter' and 'pitch_variance' as stress indicators
         
         stress_score = 0.0

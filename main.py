@@ -4,6 +4,11 @@ import wave
 import struct
 import math
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 from src.pipeline import DetectionPipeline
 
 def generate_dummy_wav(filename: str, duration: float = 10.0):
@@ -26,16 +31,15 @@ def generate_dummy_wav(filename: str, duration: float = 10.0):
 def main():
     parser = argparse.ArgumentParser(description="AI Honeypot Detection System Demo")
     parser.add_argument("--file", type=str, help="Path to a WAV file to simulate (16kHz mono recommended).")
-    parser.add_argument("--backend", choices=['vosk', 'mock'], default='mock', help="ASR backend to use.")
+    parser.add_argument("--backend", choices=['vosk', 'mock', 'whisper'], default='mock', help="ASR backend to use.")
     parser.add_argument("--live", action='store_true', help="Use live microphone input instead of file.")
     parser.add_argument("--language", choices=['en', 'hi', 'mix'], default='en', help="Language code (en, hi, or mix).")
     args = parser.parse_args()
     
     # Initialize Pipeline
-    use_mock_asr = (args.backend == 'mock')
     
     try:
-        pipeline = DetectionPipeline(use_mock_asr=use_mock_asr, language=args.language)
+        pipeline = DetectionPipeline(backend=args.backend, language=args.language)
         
         if args.live:
             pipeline.process_microphone_simulation()
@@ -52,6 +56,8 @@ def main():
         
     except KeyboardInterrupt:
         print("\nStopping simulation.")
+        if 'pipeline' in locals():
+            pipeline.save_session_log()
     except Exception as e:
         print(f"Error: {e}")
 

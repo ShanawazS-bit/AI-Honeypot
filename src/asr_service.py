@@ -156,10 +156,69 @@ class MockASRService(ASRService):
         import random
         if random.random() > 0.8:
             return TranscriptSegment(
-                text="hello this is a test call",
                 start_time=chunk.timestamp,
                 end_time=chunk.timestamp + chunk.duration,
                 confidence=0.9,
+                is_final=True
+            )
+        return None
+
+
+
+
+class FasterWhisperASRService(ASRService):
+    
+   
+    def __init__(self, model_size="tiny", device="cpu", compute_type="int8"):
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise ImportError("faster-whisper not installed. pip install faster-whisper")
+            
+        print(f"[ASRService] Loading Faster-Whisper model '{model_size}' on {device}...")
+        self.model = WhisperModel(model_size, device=device, compute_type=compute_type, cpu_threads=4)
+        self.last_text = "" # Context for next chunk
+        print("[ASRService] Faster-Whisper model loaded.")
+        
+    def process_chunk(self, chunk: AudioChunk) -> Optional[TranscriptSegment]:
+      
+        import numpy as np
+        
+        # AudioChunk data is bytes, converting to float32 
+        audio_int16 = np.frombuffer(chunk.data, dtype=np.int16)
+        audio_float32 = audio_int16.astype(np.float32) / 32768.0
+        
+        # Transcribing with context CUZ SHITS TOO DUMB
+        prompt = self.last_text[-200:] if self.last_text else None
+        
+        segments, info = self.model.transcribe(
+            audio_float32, 
+            beam_size=1, # Greedy decoding for speed AHAHHHHHHH(was 5)
+            best_of=1,
+            temperature=0.0,
+            language="en", 
+            task="transcribe",
+            vad_filter=True,
+            condition_on_previous_text=True,
+            initial_prompt=prompt,
+            no_speech_threshold=0.6,
+            log_prob_threshold=-1.0, 
+            compression_ratio_threshold=2.4
+        )
+        
+        # Collecting and updating
+        text_segments = [segment.text for segment in segments]
+        full_text = " ".join(text_segments).strip()
+        
+        if full_text:
+            self.last_text += " " + full_text
+            self.last_text = self.last_text.strip()
+            
+            return TranscriptSegment(
+                text=full_text,
+                start_time=chunk.timestamp,
+                end_time=chunk.timestamp + chunk.duration,
+                confidence=0.9, 
                 is_final=True
             )
         return None
