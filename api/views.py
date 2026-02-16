@@ -11,7 +11,7 @@ import json
 # Global Gemini Service for Lazy Loading
 gemini_service = None
 
-def run_callback(session_id, intelligence, messages_count, agent_notes, scam_type, metadata=None):
+def run_callback(session_id, intelligence, messages_count, agent_notes, scam_type, metadata=None, red_flags=None):
     """
     Sends the mandatory callback to GUVI evaluation endpoint.
     """
@@ -29,6 +29,7 @@ def run_callback(session_id, intelligence, messages_count, agent_notes, scam_typ
             "phoneNumbers": list(intelligence.get("phoneNumbers", [])),
             "suspiciousKeywords": list(intelligence.get("suspiciousKeywords", []))
         },
+        "redFlags": red_flags if red_flags else [],
         "agentNotes": agent_notes
     }
     
@@ -95,9 +96,12 @@ class HoneypotEndpoint(APIView):
         
         # 2. Intelligence Extraction
         from src.intelligence_extraction import IntelligenceExtractor
+        from src.risk_engine import RiskEngine
+        from src.response_strategy import ResponseStrategy
         
         full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
         intelligence = IntelligenceExtractor.extract(full_text)
+        red_flags = RiskEngine.analyze(full_text)
 
         # 3. Determine Scam Type & Notes
         scam_type = scenario_id if scenario_id != "unknown" else "suspected_fraud"
@@ -109,47 +113,30 @@ class HoneypotEndpoint(APIView):
                 scam_type = "bank_fraud"
             elif intelligence["upiIds"] or "upi" in intelligence["suspiciousKeywords"]:
                 scam_type = "upi_fraud"
+        
+        # Generator Strategy for Reply
+        if reply is None:
+            reply = ResponseStrategy.generate_response(scam_type, text_input)
 
         agent_notes = f"Detected {scam_type} attempt. "
-        if intelligence["suspiciousKeywords"]:
-            agent_notes += f"Keywords found: {', '.join(list(intelligence['suspiciousKeywords'])[:3])}. "
+        if red_flags:
+            agent_notes += f"Red Flags: {', '.join(red_flags)}. "
         if intelligence["bankAccounts"]:
              agent_notes += "Bank account details extracted. "
         if intelligence["phishingLinks"]:
              agent_notes += "Phishing link detected. "
-        if not intelligence["suspiciousKeywords"] and not intelligence["bankAccounts"]:
-             agent_notes = "Conversation analysis indicates potential social engineering."
+        if not red_flags and not intelligence["bankAccounts"]:
+             agent_notes += "Conversation analysis indicates potential social engineering."
 
         # 4. Fire Callback (Async)
-        if intelligence["suspiciousKeywords"] or intelligence["phoneNumbers"] or intelligence["upiIds"]:
+        if red_flags or intelligence["suspiciousKeywords"] or intelligence["phoneNumbers"] or intelligence["upiIds"]:
                  total_messages = len(history) + 1
-                 t = threading.Thread(target=run_callback, args=(session_id, intelligence, total_messages, agent_notes, scam_type, metadata))
+                 # Update callback signature in threading call
+                 t = threading.Thread(target=run_callback, args=(session_id, intelligence, total_messages, agent_notes, scam_type, metadata, red_flags))
                  t.daemon = True
                  t.start()
 
-        # 5. Fallback Response (Rule-based)
-        if reply is None:
-            lower_input = text_input.lower()
-            if any(word in lower_input for word in ["hello", "hi", "hey"]):
-                reply = "Hello... who is this?"
-            elif any(word in lower_input for word in ["police", "officer"]):
-                reply = "Police? What happened? What is your badge number?"
-            elif any(word in lower_input for word in ["urgent", "block"]):
-                reply = "Wait, I am old... tell me slowly. What is blocked?"
-            elif any(word in lower_input for word in ["otp", "code"]):
-                reply = "OTP? I didn't get any code... where it comes?"
-            else:
-                # Context-aware fallback based on scam type
-                if scam_type == "bank_fraud":
-                     reply = "My bank account? Oh god... which bank is this? SBI or HDFC?"
-                elif scam_type == "upi_fraud":
-                     reply = "Cashback? Really? How do I get it? I am not good with phone."
-                elif scam_type == "phishing":
-                     reply = "Click link? I cannot see properly... what is the website name?"
-                else:
-                     reply = "Sorry, I didn't understand. Can you repeat?"
-
-        # 6. Response with ALL fields
+        # 5. Response with ALL fields
         return Response({
             "status": "success",
             "sessionId": session_id,
@@ -157,6 +144,7 @@ class HoneypotEndpoint(APIView):
             "scamDetected": True,
             "scamType": scam_type,
             "extractedIntelligence": {k: list(v) for k, v in intelligence.items()},
+            "redFlags": red_flags,
             "agentNotes": agent_notes
         })
 
