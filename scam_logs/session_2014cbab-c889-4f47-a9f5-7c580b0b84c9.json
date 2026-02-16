@@ -1,0 +1,26 @@
+{
+  "session_id": "2014cbab-c889-4f47-a9f5-7c580b0b84c9",
+  "timestamp": 1771084095.106525,
+  "risk_level": "CRITICAL",
+  "extracted_intelligence": {
+    "bankAccounts": [],
+    "upiIds": [],
+    "emails": [],
+    "phishingLinks": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": []
+  },
+  "elevenlabs_analysis": {},
+  "transcript": [
+    {
+      "timestamp": 1771084088.377998,
+      "text": "This is a mock transcript for testing.",
+      "confidence": 1.0
+    },
+    {
+      "timestamp": 1771084089.249693,
+      "text": "This is a mock transcript for testing.",
+      "confidence": 1.0
+    }
+  ]
+}

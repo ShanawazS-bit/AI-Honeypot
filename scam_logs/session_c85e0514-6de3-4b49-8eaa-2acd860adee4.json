@@ -1,0 +1,15 @@
+{
+  "session_id": "c85e0514-6de3-4b49-8eaa-2acd860adee4",
+  "timestamp": 1771084012.148153,
+  "risk_level": "UNKNOWN",
+  "extracted_intelligence": {
+    "bankAccounts": [],
+    "upiIds": [],
+    "emails": [],
+    "phishingLinks": [],
+    "phoneNumbers": [],
+    "suspiciousKeywords": []
+  },
+  "elevenlabs_analysis": {},
+  "transcript": []
+}

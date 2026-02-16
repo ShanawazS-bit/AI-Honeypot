@@ -29,8 +29,9 @@ class DetectionPipeline:
     Audio -> [Chunker] -> [ASR] & [Paralinguistic] -> [Semantic] -> [Sequencer] -> [Scorer] -> Decision
     """
     
-    def __init__(self, backend="mock", language="en"):
+    def __init__(self, backend="mock", language="en", transcript_callback=None):
         self.call_state = CallState(call_id=str(uuid.uuid4()))
+        self.transcript_callback = transcript_callback
         
         # Initialize Components
         print(f"[Pipeline] Initializing components (Backend: {backend}, Language: {language})...")
@@ -143,6 +144,8 @@ class DetectionPipeline:
         para_features = self.para_analyzer.analyze(chunk)
         
         if transcript_segment:
+            if self.transcript_callback:
+                self.transcript_callback(transcript_segment.text)
             self._process_transcript_text(transcript_segment.text, para_features)
         
     def _process_transcript_text(self, text: str, para_features=None):

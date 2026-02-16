@@ -156,6 +156,7 @@ class MockASRService(ASRService):
         import random
         if random.random() > 0.8:
             return TranscriptSegment(
+                text="This is a mock transcript for testing.",
                 start_time=chunk.timestamp,
                 end_time=chunk.timestamp + chunk.duration,
                 confidence=0.9,
@@ -167,7 +168,6 @@ class MockASRService(ASRService):
 
 
 class FasterWhisperASRService(ASRService):
-    
    
     def __init__(self, model_size="tiny", device="cpu", compute_type="int8"):
         try:
@@ -178,27 +178,48 @@ class FasterWhisperASRService(ASRService):
         print(f"[ASRService] Loading Faster-Whisper model '{model_size}' on {device}...")
         self.model = WhisperModel(model_size, device=device, compute_type=compute_type, cpu_threads=4)
         self.last_text = "" # Context for next chunk
-        print("[ASRService] Faster-Whisper model loaded.")
+        
+        # Audio buffer for accumulating chunks
+        self.audio_buffer = bytearray()
+        self.buffer_duration_ms = 2000  # Accumulate 2 seconds before processing
+        self.sample_rate = 16000
+        self.bytes_per_second = self.sample_rate * 2  # 16-bit = 2 bytes per sample
+        self.buffer_threshold = int((self.buffer_duration_ms / 1000.0) * self.bytes_per_second)
+        
+        print(f"[ASRService] Faster-Whisper model loaded. Buffer threshold: {self.buffer_threshold} bytes ({self.buffer_duration_ms}ms)")
         
     def process_chunk(self, chunk: AudioChunk) -> Optional[TranscriptSegment]:
       
         import numpy as np
         
-        # AudioChunk data is bytes, converting to float32 
-        audio_int16 = np.frombuffer(chunk.data, dtype=np.int16)
+        # Add chunk to buffer
+        self.audio_buffer.extend(chunk.data)
+        
+        # Only process when buffer reaches threshold
+        if len(self.audio_buffer) < self.buffer_threshold:
+            print(f"[FasterWhisper] Buffering: {len(self.audio_buffer)}/{self.buffer_threshold} bytes")
+            return None
+        
+        print(f"[FasterWhisper] Buffer full ({len(self.audio_buffer)} bytes), processing...")
+        
+        # Convert buffer to float32 
+        audio_int16 = np.frombuffer(bytes(self.audio_buffer), dtype=np.int16)
         audio_float32 = audio_int16.astype(np.float32) / 32768.0
         
-        # Transcribing with context CUZ SHITS TOO DUMB
+        # Clear buffer for next accumulation
+        self.audio_buffer.clear()
+        
+        # Transcribing with context
         prompt = self.last_text[-200:] if self.last_text else None
         
         segments, info = self.model.transcribe(
             audio_float32, 
-            beam_size=1, # Greedy decoding for speed AHAHHHHHHH(was 5)
+            beam_size=1,
             best_of=1,
             temperature=0.0,
             language="en", 
             task="transcribe",
-            vad_filter=True,
+            vad_filter=False,  # Disabled for testing
             condition_on_previous_text=True,
             initial_prompt=prompt,
             no_speech_threshold=0.6,
@@ -209,6 +230,8 @@ class FasterWhisperASRService(ASRService):
         # Collecting and updating
         text_segments = [segment.text for segment in segments]
         full_text = " ".join(text_segments).strip()
+        
+        print(f"[FasterWhisper] Transcription result: '{full_text}'")
         
         if full_text:
             self.last_text += " " + full_text

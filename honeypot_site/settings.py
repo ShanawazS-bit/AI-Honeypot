@@ -32,6 +32,7 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -39,11 +40,14 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'channels',
+    'corsheaders',
     'api',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -125,8 +129,23 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Channels Configuration
+ASGI_APPLICATION = 'honeypot_site.asgi.application'
+
+# CORS Configuration for Android App
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+]
+CORS_ALLOW_ALL_ORIGINS = True  # For development only - restrict in production
+CORS_ALLOW_CREDENTIALS = True
+
 # Application Settings
 # SECURITY: Load from environment variables, not hardcoded!
 HONEYPOT_API_KEY = os.environ.get("HONEYPOT_API_KEY", "testing_api_key_team_hacksmiths10000")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", None)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
+
+# Session Log Storage
+SESSION_LOG_DIR = os.path.join(BASE_DIR, 'scam_logs')
+os.makedirs(SESSION_LOG_DIR, exist_ok=True)

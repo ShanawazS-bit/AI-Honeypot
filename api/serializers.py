@@ -12,6 +12,7 @@ class MetadataSerializer(serializers.Serializer):
 
 class ScamInputSerializer(serializers.Serializer):
     sessionId = serializers.CharField()
+    scenarioId = serializers.CharField(required=False)  # New field for scenario matching
     message = MessageSerializer()
     conversationHistory = serializers.ListField(
         child=serializers.DictField(),

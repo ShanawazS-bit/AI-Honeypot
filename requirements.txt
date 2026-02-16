@@ -2,6 +2,9 @@
 torch
 django
 djangorestframework
+channels
+daphne
+django-cors-headers
 gunicorn
 requests
 google-generativeai>=0.7.0
