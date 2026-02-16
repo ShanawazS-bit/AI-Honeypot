@@ -3,12 +3,6 @@ from typing import Dict, Set, Any
 
 class IntelligenceExtractor:
     """
-
-
-
-    ENTIRE INTELLIGENEC EXTRATION LOGIC (BASIC REGEX MATCHING)
-
-
     Extracts valuable intelligence (Bank details, UPI, Phone, Links) from text
     using regex patterns.
     """
@@ -24,10 +18,11 @@ class IntelligenceExtractor:
             "suspiciousKeywords": set()
         }
         
+        # Regex Patterns
         phone_pattern = r"(?:(?:\+91[\-\s]?)|(?<!\d))[6-9]\d{9}\b"
         upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
         email_pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-        url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
+        url_pattern = r"https?://[a-zA-Z0-9.-]+(?:\.[a-zA-Z]{2,})+(?:[/?][\w\-.~!$&'()*+,;=:@%]*)*"
         acc_pattern = r"\b\d{9,18}\b" 
 
         found_phones = set(re.findall(phone_pattern, text_input))
@@ -47,7 +42,6 @@ class IntelligenceExtractor:
             if not is_phone:
                 clean_accounts.add(acc)
         
-        
         clean_upis = set()
         for upi in found_upis:
             if upi not in found_emails:
@@ -62,8 +56,9 @@ class IntelligenceExtractor:
         scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp",
                          "arrest", "police", "legal", "pay", "account", "upi", "bank", "card"]
         
+        lower_text = text_input.lower()
         for kw in scam_keywords:
-            if kw in text_input.lower():
+            if kw in lower_text:
                 intelligence["suspiciousKeywords"].add(kw)
                 
         return intelligence

@@ -17,7 +17,6 @@ def run_callback(session_id, intelligence, messages_count, agent_notes, scam_typ
     """
     url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
     
-    # Format intelligence as list of strings as per example
     payload = {
         "sessionId": session_id,
         "scamDetected": True,
@@ -38,7 +37,6 @@ def run_callback(session_id, intelligence, messages_count, agent_notes, scam_typ
     
     try:
         print(f"Sending Callback for {session_id}...")
-        # print(json.dumps(payload, indent=2)) # Debug
         resp = requests.post(url, json=payload, timeout=5)
         print(f"Callback Status: {resp.status_code}, Body: {resp.text}")
     except Exception as e:
@@ -61,7 +59,6 @@ class HoneypotEndpoint(APIView):
 
     def post(self, request):
         api_key = request.headers.get("x-api-key")
-        # print(f"Headers: {request.headers}")
         
         if not api_key:
             return Response(
@@ -92,61 +89,19 @@ class HoneypotEndpoint(APIView):
         
         print(f"Processing Session: {session_id}, Scenario: {scenario_id}, Input: '{text_input}'")
         
-        # --- Logic Core ---
-        
         # 1. Try Gemini (LLM) First - FAST PATH
         # SKIPPED AS PER USER REQUEST - Falling back to logic
         reply = None
         
-        # 2. Intelligence Extraction (Regex + Keywords)
-        intelligence = {
-            "bankAccounts": set(),
-            "upiIds": set(),
-            "phishingLinks": set(),
-            "phoneNumbers": set(),
-            "suspiciousKeywords": set()
-        }
+        # 2. Intelligence Extraction
+        from src.intelligence_extraction import IntelligenceExtractor
         
-        # Combine text for analysis
         full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
-        
-        # Improved Regex Patterns
-        phone_pattern = r"(?:(?:\+91[\-\s]?)|(?<!\d))[6-9]\d{9}\b"
-        upi_pattern = r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}"
-        url_pattern = r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
-        acc_pattern = r"\b\d{9,18}\b" 
-
-        found_phones = set(re.findall(phone_pattern, full_text))
-        found_upis = set(re.findall(upi_pattern, full_text))
-        found_links = set(re.findall(url_pattern, full_text))
-        found_accounts = set(re.findall(acc_pattern, full_text))
-        
-        # Filter: Remove phone numbers from bank accounts
-        clean_accounts = set()
-        for acc in found_accounts:
-            is_phone = False
-            for ph in found_phones:
-                if acc in ph:
-                    is_phone = True
-                    break
-            if not is_phone:
-                    clean_accounts.add(acc)
-        
-        intelligence["phoneNumbers"].update(found_phones)
-        intelligence["upiIds"].update(found_upis)
-        intelligence["phishingLinks"].update(found_links)
-        intelligence["bankAccounts"].update(clean_accounts)
-        
-        scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "link", "pan", "aadhar", "otp",
-                            "arrest", "police", "legal", "pay", "account", "upi", "bank", "card"]
-        for kw in scam_keywords:
-            if kw in full_text.lower():
-                intelligence["suspiciousKeywords"].add(kw)
+        intelligence = IntelligenceExtractor.extract(full_text)
 
         # 3. Determine Scam Type & Notes
         scam_type = scenario_id if scenario_id != "unknown" else "suspected_fraud"
         
-        # If scenarioId is unknown, try to guess
         if scam_type == "suspected_fraud":
             if intelligence["phishingLinks"]:
                 scam_type = "phishing"
