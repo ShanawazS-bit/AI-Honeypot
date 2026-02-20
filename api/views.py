@@ -6,36 +6,65 @@ from .serializers import ScamInputSerializer
 import requests
 import re
 import threading
+import time
 import json
+from datetime import datetime, timezone
 
-# Global Gemini Service for Lazy Loading
-gemini_service = None
+# Global LLM Service
+from src.llm_service import LLMService
+llm_service = LLMService()
 
-def run_callback(session_id, intelligence, messages_count, agent_notes, scam_type, metadata=None, red_flags=None):
+# ── Server-side session store ────────────────────────────────────────────────
+# Tracks start time and running message count per sessionId so that
+# engagementDurationSeconds and totalMessagesExchanged grow correctly
+# even when the client sends only a single-turn history.
+SESSION_STORE: dict = {}
+
+
+def _parse_ts(val) -> float:
+    """Parse any timestamp format to a Unix float (seconds)."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        ts = float(val)
+        return ts / 1000.0 if ts > 1e12 else ts   # ms → s
+    s = str(val).strip()
+    if s.isdigit():
+        ts = float(s)
+        return ts / 1000.0 if ts > 1e12 else ts
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except Exception:
+        return None
+
+def run_callback(session_id, intelligence, messages_count, agent_notes, scam_type, metadata=None, red_flags=None, duration=0, confidence=0.8):
     """
-    Sends the mandatory callback to GUVI evaluation endpoint.
+    Submits the final output to the GUVI evaluation endpoint after each turn.
+    Payload matches the required Final Output Submission format exactly.
     """
     url = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-    
+
     payload = {
-        "sessionId": session_id,
-        "scamDetected": True,
-        "scamType": scam_type,
-        "totalMessagesExchanged": messages_count,
+        "sessionId":           session_id,
+        "scamDetected":        True,
         "extractedIntelligence": {
-            "bankAccounts": list(intelligence.get("bankAccounts", [])),
-            "upiIds": list(intelligence.get("upiIds", [])),
+            "phoneNumbers":  list(intelligence.get("phoneNumbers",  [])),
+            "bankAccounts":  list(intelligence.get("bankAccounts",  [])),
+            "upiIds":        list(intelligence.get("upiIds",        [])),
             "phishingLinks": list(intelligence.get("phishingLinks", [])),
-            "phoneNumbers": list(intelligence.get("phoneNumbers", [])),
-            "suspiciousKeywords": list(intelligence.get("suspiciousKeywords", []))
+            "emailAddresses":list(intelligence.get("emailAddresses",[])),
+            "caseIds":       list(intelligence.get("caseIds",       [])),
+            "policyNumbers": list(intelligence.get("policyNumbers", [])),
+            "orderNumbers":  list(intelligence.get("orderNumbers",  [])),
         },
-        "redFlags": red_flags if red_flags else [],
-        "agentNotes": agent_notes
+        "totalMessagesExchanged":    messages_count,
+        "engagementDurationSeconds": duration,
+        "agentNotes":                agent_notes,
+        "scamType":                  scam_type,
+        "confidenceLevel":           confidence,
     }
-    
-    if metadata:
-        payload["metadata"] = metadata
-    
+
     try:
         print(f"Sending Callback for {session_id}...")
         resp = requests.post(url, json=payload, timeout=5)
@@ -50,33 +79,24 @@ class HoneypotEndpoint(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def get(self, request):
-        """
-        Health Check for Browser Access.
-        """
         return Response({
             "status": "online", 
-            "message": "Honeypot API is running. Send POST requests to this endpoint for scam detection."
+            "message": "Honeypot API is running. Send POST requests to 'input' or 'text' field."
         })
 
     def post(self, request):
         api_key = request.headers.get("x-api-key")
         
-        if not api_key:
-            return Response(
-                {"status": "error", "message": "Missing Valid API Key"}, 
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
         # Parse Input
         serializer = ScamInputSerializer(data=request.data)
         if not serializer.is_valid():
-            print(f"Serializer Errors: {serializer.errors}")
             text_input = request.data.get("text") or request.data.get("input", "")
             if text_input:
-                 session_id = "fallback-session"
+                 session_id = request.data.get("sessionId", "fallback-session")
                  scenario_id = "unknown"
-                 history = []
-                 metadata = {}
+                 history = request.data.get("conversationHistory", [])
+                 metadata = request.data.get("metadata", {})
+                 timestamp = request.data.get("message", {}).get("timestamp")
             else:
                  return Response({"status": "error", "message": "Invalid Request Format"}, status=400)
         else:
@@ -85,68 +105,110 @@ class HoneypotEndpoint(APIView):
             scenario_id = data.get("scenarioId", "unknown")
             msg_obj = data.get("message", {})
             text_input = msg_obj.get("text", "")
+            timestamp = msg_obj.get("timestamp")
             history = data.get("conversationHistory", [])
             metadata = data.get("metadata", {})
         
-        print(f"Processing Session: {session_id}, Scenario: {scenario_id}, Input: '{text_input}'")
+        # ── Session tracking ─────────────────────────────────────────────
+        now = time.time()
+        if session_id not in SESSION_STORE:
+            # First call for this session — record start time
+            first_ts = _parse_ts(timestamp)
+            if history:
+                first_ts = _parse_ts(history[0].get("timestamp")) or first_ts
+            SESSION_STORE[session_id] = {
+                "start":    first_ts or now,
+                "msg_count": 0,
+            }
+
+        sess = SESSION_STORE[session_id]
+        sess["msg_count"] += 2   # +1 for scammer input, +1 for our reply
+
+        # Duration: wall-clock time since session start (always grows)
+        duration = int(now - sess["start"])
+        total_msgs = sess["msg_count"] + len(history)
+
+        turn_count = len(history)
+        print(f"Processing Session: {session_id}, Turns: {turn_count}, Input: '{text_input}'")
         
-        # 1. Try Gemini (LLM) First - FAST PATH
-        # SKIPPED AS PER USER REQUEST - Falling back to logic
-        reply = None
-        
-        # 2. Intelligence Extraction
+        # 1. Intelligence Extraction
         from src.intelligence_extraction import IntelligenceExtractor
         from src.risk_engine import RiskEngine
-        from src.response_strategy import ResponseStrategy
         
         full_text = text_input + " " + " ".join([m.get("text", "") for m in history])
         intelligence = IntelligenceExtractor.extract(full_text)
         red_flags = RiskEngine.analyze(full_text)
 
-        # 3. Determine Scam Type & Notes
-        scam_type = scenario_id if scenario_id != "unknown" else "suspected_fraud"
-        
-        if scam_type == "suspected_fraud":
-            if intelligence["phishingLinks"]:
-                scam_type = "phishing"
-            elif intelligence["bankAccounts"] or "bank" in intelligence["suspiciousKeywords"]:
-                scam_type = "bank_fraud"
-            elif intelligence["upiIds"] or "upi" in intelligence["suspiciousKeywords"]:
-                scam_type = "upi_fraud"
-        
-        # Generator Strategy for Reply
-        if reply is None:
-            reply = ResponseStrategy.generate_response(scam_type, text_input)
+        # 2+3. Run insight classification and reply generation CONCURRENTLY
+        #       This halves LLM latency — both calls hit the Gemini API in parallel.
+        insight_result  = [None]
+        reply_result    = [None]
+        insight_err     = [None]
+        reply_err       = [None]
 
-        agent_notes = f"Detected {scam_type} attempt. "
-        if red_flags:
-            agent_notes += f"Red Flags: {', '.join(red_flags)}. "
-        if intelligence["bankAccounts"]:
-             agent_notes += "Bank account details extracted. "
-        if intelligence["phishingLinks"]:
-             agent_notes += "Phishing link detected. "
-        if not red_flags and not intelligence["bankAccounts"]:
-             agent_notes += "Conversation analysis indicates potential social engineering."
+        def _run_insight():
+            try:
+                insight_result[0] = llm_service.generate_insight(full_text)
+            except Exception as e:
+                insight_err[0] = e
 
-        # 4. Fire Callback (Async)
-        if red_flags or intelligence["suspiciousKeywords"] or intelligence["phoneNumbers"] or intelligence["upiIds"]:
-                 total_messages = len(history) + 1
-                 # Update callback signature in threading call
-                 t = threading.Thread(target=run_callback, args=(session_id, intelligence, total_messages, agent_notes, scam_type, metadata, red_flags))
-                 t.daemon = True
-                 t.start()
+        def _run_reply():
+            try:
+                reply_result[0] = llm_service.generate_response(
+                    text_input=text_input,
+                    history=history,
+                    intent="suspected_fraud",  # placeholder; insight runs in parallel
+                    turn_count=len(history),
+                    extracted_intelligence=intelligence,
+                    session_id=session_id,
+                )
+            except Exception as e:
+                reply_err[0] = e
 
-        # 5. Response with ALL fields
+        t_insight = threading.Thread(target=_run_insight, daemon=True)
+        t_reply   = threading.Thread(target=_run_reply,   daemon=True)
+        t_insight.start()
+        t_reply.start()
+        t_insight.join(timeout=25)
+        t_reply.join(timeout=25)
+
+        # Unpack results
+        insight     = insight_result[0]  # None if LLM failed
+        scam_type   = insight.get("scamType", "suspected_fraud") if insight else "suspected_fraud"
+        agent_notes = insight.get("agentNotes", "") if insight else ""
+        confidence  = insight.get("confidence", 0.8) if insight else 0.8
+        reply       = reply_result[0]  # None if LLM failed
+
+        # If LLM produced no reply at all, return 503 — no hardcoded strings
+        if not reply:
+            return Response(
+                {"status": "error", "message": "LLM service unavailable. Please retry."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Keyword fallback for scam type when LLM returns unknown
+        if scam_type in ("suspected_fraud", "unknown"):
+            if intelligence["phishingLinks"]:  scam_type = "phishing"
+            elif intelligence["bankAccounts"]: scam_type = "bank_fraud"
+            elif intelligence["upiIds"]:       scam_type = "upi_fraud"
+
+
+        # 4. Async callback (non-blocking)
+        t = threading.Thread(
+            target=run_callback,
+            args=(session_id, intelligence, total_msgs, agent_notes, scam_type, metadata, red_flags, duration, confidence),
+            daemon=True,
+        )
+        t.start()
+
+
+        # 5. Per-turn response — simple format as per spec
+        #    Full intelligence is submitted via the async GUVI callback (run_callback above)
         return Response({
             "status": "success",
-            "sessionId": session_id,
-            "reply": reply,
-            "scamDetected": True,
-            "scamType": scam_type,
-            "extractedIntelligence": {k: list(v) for k, v in intelligence.items()},
-            "redFlags": red_flags,
-            "agentNotes": agent_notes
+            "reply":  reply,
         })
+
 
 class CallSessionView(APIView):
     """

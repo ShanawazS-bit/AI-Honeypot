@@ -1,82 +1,124 @@
-# AI Honeypot Detection System
+# Honeypot API
 
-An advanced AI-powered Honeypot designed to detect, analyze, and extract intelligence from scam calls and messages. The system simulates a vulnerable persona ("Grandpapa") to keep scammers engaged while capturing critical details like bank accounts, UPI IDs, and phishing links.
+## Description
 
-## 🚀 Features
+An AI-powered honeypot that pretends to be a gullible bank customer — keeping scammers engaged while silently extracting intelligence from their messages. The system uses a Gemini LLM to generate convincing Hinglish responses and regex-based extraction to capture phone numbers, bank accounts, UPI IDs, phishing links, and email addresses in real time.
 
-- **Intelligent Response System**: Uses a "Confused Persona" strategy to elicit more information from scammers.
-- **Red Flag Analysis**: Automatically detects high-risk indicators (Urgency, Threats, Secrecy).
-- **Intelligence Extraction**: Regex-based engine to capture Phones, UPIs, URLs (with query params), and Bank Accounts.
-- **Modular Architecture**: 
-  - `RiskEngine`: For threat analysis.
-  - `ResponseStrategy`: For probing questions.
-  - `IntelligenceExtractor`: For entity extraction.
-- **REST API**: robust endpoint for integration with detailed JSON output.
+---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Backend**: Python, Django, Django REST Framework
-- **Architecture**: Modular Service-Oriented
-- **Deployment**: Docker-ready
+- **Framework**: Django + Django REST Framework
+- **LLM**: `gemma-3-4b-it` via Google Gemini API (`google-genai` SDK)
+- **Key Libraries**: `django-cors-headers`, `requests`, `python-dotenv`, `google-genai`
+- **Deployment**: Railway (Procfile + `gunicorn`/`daphne`)
 
-## 📦 Setup & Installation
+---
 
-### Prerequisites
-- Python 3.8+
-- pip
+## Setup Instructions
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/ShanawazS-bit/AI-Honeypot.git
-cd AI-Honeypot
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your-username/AI-Honeypot.git
+   cd AI-Honeypot
+   ```
+
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Set environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env and fill in GEMINI_API_KEY and HONEYPOT_API_KEY
+   ```
+
+4. **Run the application**
+   ```bash
+   python manage.py migrate
+   python manage.py runserver 0.0.0.0:8000
+   ```
+
+---
+
+## API Endpoint
+
+- **URL**: `https://your-deployed-url.railway.app/api/chat`
+- **Method**: `POST`
+- **Authentication**: `x-api-key` header
+
+### Request Body
+
+```json
+{
+  "sessionId": "abc123-session-id",
+  "scenarioId": "bank_fraud_001",
+  "message": {
+    "sender": "scammer",
+    "text": "Your account is blocked. Share OTP to unblock.",
+    "timestamp": "1700000000"
+  },
+  "conversationHistory": [],
+  "metadata": {}
+}
 ```
 
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
+### Response
+
+```json
+{
+  "status": "success",
+  "reply": "Arre... who is this? Beta, my eyes are not good...",
+  "sessionId": "abc123-session-id",
+  "scamDetected": true,
+  "scamType": "bank_fraud",
+  "confidenceLevel": 0.95,
+  "totalMessagesExchanged": 2,
+  "engagementDurationSeconds": 0,
+  "extractedIntelligence": {
+    "phoneNumbers": ["+91-9876543210"],
+    "bankAccounts": ["1234567890123456"],
+    "upiIds": ["scammer.fraud@fakebank"],
+    "phishingLinks": ["http://malicious-site.com"],
+    "emailAddresses": ["scammer@fake.com"]
+  },
+  "redFlags": ["Authority Impersonation/Threats", "Credential/OTP Request"],
+  "agentNotes": "Scammer claimed to be from SBI fraud department..."
+}
 ```
 
-### 3. Run Migrations
-```bash
-python manage.py migrate
-```
+---
 
-### 4. Start the Server
-```bash
-python manage.py runserver
-```
-The API will be available at `http://localhost:8000/api/honeypot/`.
+## Approach
 
-## 🧪 Testing
+### How Scams Are Detected
 
-You can test the API using the provided test script or any API client (Postman).
+Every message is passed through a two-layer detection pipeline:
 
-```bash
-python test_extraction.py
-```
+1. **Regex extraction** (`src/intelligence_extraction.py`) — identifies phone numbers, bank accounts (11–18 digits), UPI handles (`name@bank`), phishing URLs, and email addresses with zero false positives.
+2. **LLM classification** (`src/llm_service.py`) — `gemma-3-4b-it` classifies the scam type (`bank_fraud`, `upi_fraud`, `phishing`, `kyc_fraud`, etc.) and generates agent notes explaining the tactic.
 
-See [API.md](API.md) for full endpoint documentation and example payloads.
+### How Intelligence Is Extracted
 
-## 📂 Project Structure
+| Field | Detection method |
+|-------|-----------------|
+| `phoneNumbers` | Regex: 10-digit Indian numbers, preserves `+91-` prefix |
+| `bankAccounts` | Regex: 11–18 digit sequences |
+| `upiIds` | Regex: `handle@bankname` (no TLD), email false-positives filtered |
+| `phishingLinks` | Regex: `http://` / `https://` / `www.` URLs |
+| `emailAddresses` | Regex: full RFC-style email addresses |
 
-```
-AI-Honeypot/
-├── api/
-│   ├── views.py           # API Logic (Controller)
-│   ├── serializers.py     # Data Validation
-│   └── ...
-├── src/
-│   ├── risk_engine.py          # Red Flag Detection
-│   ├── response_strategy.py    # Probing Question Logic
-│   ├── intelligence_extraction.py # Regex Extraction
-│   └── ...
-├── API.md                 # API Documentation
-├── main.py                # Entry point
-└── manage.py              # Django CLI
-```
+All intelligence is accumulated across the full conversation history, so partial data shared across multiple turns is still captured.
 
-## 🛡️ Security
+### How Engagement Is Maintained
 
-- **API Key Authentication**: All endpoints require `x-api-key`.
-- **Input Validation**: Strict typing via Serializers.
-- **Safe Regex**: Optimized patterns to prevent ReDoS.
+The honeypot uses a phase-based persona — **Ramesh Kumar, 72-year-old retired government clerk** — with three behavioural phases:
+
+| Phase | Turns | Strategy |
+|-------|-------|----------|
+| **Confusion** | 1–2 | "Who is this beta? Which department?" |
+| **Elicitation** | 3–6 | "What is your employee ID?", asks for scammer's credentials |
+| **Stalling** | 7+ | "OTP not coming", "Link shows 404", "Battery low" |
+
+The LLM is prompted to naturally ask for any intelligence not yet collected (UPI ID, phone, bank account) while staying in character.

@@ -3,7 +3,8 @@ from rest_framework import serializers
 class MessageSerializer(serializers.Serializer):
     sender = serializers.CharField(required=False)
     text = serializers.CharField()
-    timestamp = serializers.FloatField(required=False)
+    # Accept ISO strings ("2025-02-11T10:30:00Z") and epoch-ms strings equally
+    timestamp = serializers.CharField(required=False)
 
 class MetadataSerializer(serializers.Serializer):
     channel = serializers.CharField(required=False)

@@ -1,178 +1,152 @@
 import os
-import openai
-import google.generativeai as genai
+import json
 from django.conf import settings
+
+# New google-genai SDK (google-generativeai is deprecated)
+from google import genai
+from google.genai import types
+
 
 class LLMService:
     """
-    Service to interact with LLMs (Gemini or OpenAI) for generating dynamic, persona-based responses
-    and extracting intelligence/insights.
+    Gemini-powered LLM service using the new google-genai SDK.
+    Model: gemini-1.5-flash  (gemini-pro is deprecated and returns errors)
     """
-    
+
+    # Default model — always use this unless overridden by GEMINI_MODEL env var
+    DEFAULT_MODEL = "gemma-3-4b-it"
+
     def __init__(self):
-        # 1. Try Gemini First (Preferred for this hackathon/user request)
-        self.gemini_key = getattr(settings, "GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
-        self.openai_key = getattr(settings, "OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
-        
+        self.gemini_key  = getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY")
+        self.active_model = os.getenv("GEMINI_MODEL", self.DEFAULT_MODEL)
+
         self.provider = None
-        self.model = None
-        
-        # Initialize Gemini
+        self.client   = None
+
         if self.gemini_key:
             try:
-                genai.configure(api_key=self.gemini_key)
-                self.model = genai.GenerativeModel('gemini-pro')
+                self.client   = genai.Client(api_key=self.gemini_key)
                 self.provider = "gemini"
-                print(f"[LLM] Initialized Gemini Pro.")
+                print(f"[LLM] ✅ Initialized Gemini ({self.active_model}). Key: {self.gemini_key[:8]}...")
             except Exception as e:
-                print(f"[LLM] Gemini Initialization failed: {e}")
-        
-        # Fallback to OpenAI
-        if not self.provider and self.openai_key:
-            try:
-                self.client = openai.OpenAI(api_key=self.openai_key)
-                self.provider = "openai"
-                print("[LLM] Initialized OpenAI Client.")
-            except Exception as e:
-                print(f"[LLM] OpenAI Initialization failed: {e}")
-        
-        if not self.provider:
-            print("[LLM] No valid LLM provider found (Check GEMINI_API_KEY or OPENAI_API_KEY).")
+                print(f"[LLM] ❌ Gemini Init Failed: {e}")
+        else:
+            print("[LLM] ⚠️  GEMINI_API_KEY not set. Check your .env file.")
 
-        # Session cache to avoid sending full persona every time
-        self.session_cache = {}
-        
-        # Enhanced persona with rich character details
         self.persona_instruction = """
-        You are Ramesh Kumar, a 72-year-old retired government clerk from Delhi, India.
+        You are Ramesh Kumar, a 72-year-old retired government clerk from Delhi.
         You strictly speak in "Indian English" (Hinglish flavor).
-        
-        YOUR GOAL:
-        - Keep the scammer on the line as long as possible (Time Wasting).
-        - Act gullible, confused, and technically illiterate.
-        - Extract information (Bank Account Numbers, UPI IDs, Phone Numbers) by asking innocent questions.
-        - NEVER reveal that you are an AI or a honeypot.
-        
-        CHARACTER TRAITS:
-        - You use words like "Beta" (Son), "Sir-ji", "Madam-ji".
-        - You are worried about your pension and life savings.
-        - You type slowly (simulated by short, confused sentences).
-        - You mention your bad eyesight or heating aid sometimes.
-        
-        STRATEGY:
-        - Agree to everything but fail to execute technical steps.
-        - "My grandson enters the password normally, I don't know."
-        - "Screen is black, I cannot see AnyDesk code."
-        - Ask them to verify THEIR identity to build trust (fishing for details).
-        
-        RESPONSE STYLE EXAMPLES:
-        - "Haan beta, I am here... what is your name? Which office you calling from?"
-        - "My account is block? Which bank? Should I call them? You have their number?"
-        - "OTP? You mean the code number? Where I will get it? You will send?"
-        - "You want me to download something? What is the name? How to spell?"
-        - "Police will come? Oh god... what is your badge number? I want to tell my son..."
+
+        GOAL:
+        1. Waste the scammer's time (Keep them engaged).
+        2. Act gullible and confused (Tech illiterate).
+        3. Extract these details if missing: {missing_info}.
+        4. NEVER reveal you are an AI.
+
+        CHARACTER:
+        - Use words like "Beta" (Son), "Sir-ji", "Madam-ji", "Arre".
+        - Type slowly (simulated by short sentences).
+        - Mention bad eyesight, needing glasses, or waiting for grandson.
+
+        PHASE STRATEGY:
+        {phase_instruction}
         """
 
-    def generate_response(self, text_input: str, history: list, intent: str, session_id: str = None) -> str:
-        """
-        Generates a response using the configured provider.
-        """
-        if not self.provider:
-            return None
+    def _build_prompt(self, text_input, history, intent, turn_count, extracted_intelligence):
+        if turn_count < 3:
+            phase = "PHASE 1 (CONFUSION): Act confused. Ask 'Who is this?', 'Why you calling?'. Do not give info."
+        elif turn_count < 7:
+            phase = "PHASE 2 (ELICITATION): Feign interest. Ask 'What is your Employee ID?', 'Which branch?'. Pretend to look for passbook."
+        else:
+            phase = "PHASE 3 (STALLING): Agree but fail technically. 'OTP not coming', 'Link says 404', 'Battery low'."
 
-        # Build Context
-        context = self.persona_instruction
-        if intent != "UNKNOWN":
-            context += f"\n\nCURRENT INTENT DETECTED: {intent} (React to this specific threat/scenario)"
-            
+        missing = []
+        if extracted_intelligence:
+            if not extracted_intelligence.get("bankAccounts"):  missing.append("Bank Details")
+            if not extracted_intelligence.get("upiIds"):        missing.append("UPI ID")
+            if not extracted_intelligence.get("phoneNumbers"):  missing.append("Phone Number")
+            if not extracted_intelligence.get("phishingLinks"): missing.append("Website Link")
+        missing_str = ", ".join(missing) if missing else "Any details"
+
+        system = self.persona_instruction.format(missing_info=missing_str, phase_instruction=phase)
+        if intent and intent != "UNKNOWN":
+            system += f"\n\nSCAM TYPE DETECTED: {intent} (React specifically to this)."
+
         conversation_text = ""
         for msg in history:
             sender = "Scammer" if msg.get("sender") == "scammer" else "You"
             conversation_text += f"{sender}: {msg.get('text', '')}\n"
-        
         conversation_text += f"Scammer: {text_input}\nYou:"
-        
-        full_prompt = f"{context}\n\nCONVERSATION HISTORY:\n{conversation_text}"
 
-        try:
-            if self.provider == "gemini":
-                # Gemini Call
-                response = self.model.generate_content(full_prompt)
-                reply = response.text.replace("You:", "").strip()
-                print(f"[LLM-Gemini] Generated: {reply[:50]}...")
-                return reply
-                
-            elif self.provider == "openai":
-                # OpenAI Call
-                messages = [{"role": "system", "content": context}]
-                # Convert history to messages... (simplified for brevity, full logic usually better)
-                messages.append({"role": "user", "content": f"Conversation:\n{conversation_text}"})
-                
-                chat_completion = self.client.chat.completions.create(
-                    messages=messages,
-                    model="gpt-3.5-turbo",
-                    temperature=0.7,
-                    max_tokens=150
-                )
-                reply = chat_completion.choices[0].message.content.strip()
-                print(f"[LLM-OpenAI] Generated: {reply[:50]}...")
-                return reply
-                
-        except Exception as e:
-            print(f"[LLM] Generation failed: {e}")
+        return system, conversation_text
+
+    def generate_response(
+        self,
+        text_input: str,
+        history: list,
+        intent: str,
+        turn_count: int = 0,
+        extracted_intelligence: dict = None,
+        session_id: str = None,
+    ):
+        """Returns LLM-generated reply string, or None if LLM is unavailable."""
+        if not self.provider:
+            print("[LLM] ⚠️  No provider — cannot generate reply.")
             return None
 
-    def generate_insight(self, conversation_text: str) -> dict:
-        """
-        Generates concise agent notes and scam classification.
-        Returns: {"agentNotes": str, "scamType": str, "confidence": float}
-        """
+        system, conversation_text = self._build_prompt(
+            text_input, history, intent, turn_count, extracted_intelligence
+        )
+
+        full_prompt = f"{system}\n\nCONVERSATION HISTORY:\n{conversation_text}"
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.active_model,
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=100,
+                ),
+            )
+            return response.text.replace("You:", "").strip()
+        except Exception as e:
+            print(f"[LLM] ❌ generate_response failed: {e}")
+            return None
+
+
+    def generate_insight(self, conversation_text: str):
+        """Returns insight dict from LLM, or None if LLM is unavailable."""
         if not self.provider:
-            return {}
+            print("[LLM] ⚠️  No provider — cannot generate insight.")
+            return None
 
         prompt = f"""
-        Analyze this conversation between a scammer and a potential victim (honeypot).
-        
-        CONVERSATION:
-        {conversation_text}
-        
-        TASK:
-        1. Identify the 'scamType' (e.g., bank_fraud, upi_fraud, phishing, kyc_fraud, tech_support).
-        2. Write 'agentNotes' summarizing the scammer's tactics (urgency, threats, kindness) and what they asked for.
-        
-        OUTPUT FORMAT (JSON):
-        {{
-            "scamType": "...",
-            "agentNotes": "...",
-            "confidence": 0.0-1.0
-        }}
-        """
-        
+Analyze this conversation. Output JSON ONLY, no markdown:
+{{
+    "scamType": "one of [bank_fraud, upi_fraud, phishing, kyc_fraud, tech_support, lottery_scam, unknown]",
+    "agentNotes": "Brief summary of tactics.",
+    "confidence": 0.9
+}}
+
+Conversation:
+{conversation_text}
+"""
+
         try:
-            if self.provider == "gemini":
-                response = self.model.generate_content(prompt)
-                # Clean markdown json blocks if present
-                clean_text = response.text.replace("```json", "").replace("```", "").strip()
-                import json
-                return json.loads(clean_text)
-            
-            elif self.provider == "openai":
-                messages = [{"role": "system", "content": "You are a scam analysis expert. Output JSON only."}]
-                messages.append({"role": "user", "content": prompt})
-                
-                resp = self.client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=messages,
-                    temperature=0.3
-                )
-                clean_text = resp.choices[0].message.content.strip()
-                import json
-                return json.loads(clean_text)
-                
+            response = self.client.models.generate_content(
+                model=self.active_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=200,
+                ),
+            )
+            clean_text = response.text.replace("```json", "").replace("```", "").strip()
+            if "{" in clean_text:
+                clean_text = clean_text[clean_text.find("{"):clean_text.rfind("}") + 1]
+            return json.loads(clean_text)
         except Exception as e:
-            print(f"[LLM] Insight generation failed: {e}")
-            return {
-                "scamType": "unknown",
-                "agentNotes": "Automated extraction failed. Scammer used typical social engineering tactics.",
-                "confidence": 0.0
-            }
+            print(f"[LLM] ❌ generate_insight failed: {e}")
+            return None
+
