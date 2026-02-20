@@ -2,16 +2,34 @@
 
 ## Description
 
-An AI-powered honeypot that pretends to be a gullible bank customer — keeping scammers engaged while silently extracting intelligence from their messages. The system uses a Gemini LLM to generate convincing Hinglish responses and regex-based extraction to capture phone numbers, bank accounts, UPI IDs, phishing links, and email addresses in real time.
+The Honeypot API is an AI-powered decoy system that poses as a gullible bank customer to engage scammers in conversation, keep them occupied, and silently extract intelligence from their messages.
+
+**Persona:** "Ramesh Kumar" — a 72-year-old retired government clerk who is confused by technology, easily stalled, and responds in Hinglish. This profile maximises engagement duration because scammers believe they have an easy target.
+
+**Strategy — Three Phases:**
+1. **Confusion (turns 1–2):** Asks who is calling, requests employee ID, buys time
+2. **Elicitation (turns 3–6):** Probes for scammer credentials (bank account, UPI ID, phone number), pretends to fetch documents
+3. **Stalling (turns 7+):** "OTP not coming", "link says 404", "battery low" — indefinite delay
+
+Every incoming message is passed through two pipelines simultaneously:
+- **Regex extraction** (`src/intelligence_extraction.py`) — pulls phone numbers, bank accounts, UPI IDs, phishing links, email addresses, case IDs, policy numbers, and order numbers
+- **LLM classification + reply generation** (`src/llm_service.py`) — `gemma-3-4b-it` classifies the scam type and generates a natural Hinglish response in character
+
+After generating the reply, the full extracted intelligence is reported asynchronously to the GUVI evaluation endpoint.
 
 ---
 
 ## Tech Stack
 
-- **Framework**: Django + Django REST Framework
-- **LLM**: `gemma-3-4b-it` via Google Gemini API (`google-genai` SDK)
-- **Key Libraries**: `django-cors-headers`, `requests`, `python-dotenv`, `google-genai`
-- **Deployment**: Railway (Procfile + `gunicorn`/`daphne`)
+- **Language:** Python 3.11
+- **Framework:** Django 4.x + Django REST Framework
+- **LLM:** `gemma-3-4b-it` via Google Gemini API (`google-generativeai` SDK)
+- **Intelligence Extraction:** Custom regex engine (`src/intelligence_extraction.py`)
+- **Risk Detection:** Rule-based red flag engine (`src/risk_engine.py`)
+- **Concurrency:** Python `threading` — LLM insight and reply run in parallel to halve latency
+- **Production Server:** Gunicorn / Daphne (ASGI)
+- **Deployment:** Railway (`railway.json`, `Procfile`)
+- **Key Libraries:** `google-generativeai`, `djangorestframework`, `channels`, `daphne`, `django-cors-headers`, `requests`, `python-dotenv`
 
 ---
 
@@ -31,7 +49,15 @@ An AI-powered honeypot that pretends to be a gullible bank customer — keeping 
 3. **Set environment variables**
    ```bash
    cp .env.example .env
-   # Edit .env and fill in GEMINI_API_KEY and HONEYPOT_API_KEY
+   ```
+   Edit `.env`:
+   ```env
+   SECRET_KEY=your-django-secret-key
+   DEBUG=False
+   ALLOWED_HOSTS=localhost,127.0.0.1,.railway.app
+   GEMINI_API_KEY=your-gemini-api-key      # https://aistudio.google.com/app/apikey
+   HONEYPOT_API_KEY=your-api-key
+   # Optional: GEMINI_MODEL=gemini-2.0-flash  (default: gemma-3-4b-it)
    ```
 
 4. **Run the application**
@@ -39,86 +65,88 @@ An AI-powered honeypot that pretends to be a gullible bank customer — keeping 
    python manage.py migrate
    python manage.py runserver 0.0.0.0:8000
    ```
+   For production:
+   ```bash
+   daphne -b 0.0.0.0 -p 8000 honeypot_site.asgi:application
+   ```
 
 ---
 
 ## API Endpoint
 
-- **URL**: `https://your-deployed-url.railway.app/api/chat`
-- **Method**: `POST`
-- **Authentication**: `x-api-key` header
+### `POST /api/chat`
 
-### Request Body
+**Headers:**
+```
+Content-Type: application/json
+x-api-key: <your-api-key>
+```
 
+**Request Body:**
 ```json
 {
-  "sessionId": "abc123-session-id",
-  "scenarioId": "bank_fraud_001",
+  "sessionId": "uuid-v4-string",
   "message": {
     "sender": "scammer",
-    "text": "Your account is blocked. Share OTP to unblock.",
-    "timestamp": "1700000000"
+    "text": "URGENT: Your account has been compromised...",
+    "timestamp": "2025-02-11T10:30:00Z"
   },
-  "conversationHistory": [],
-  "metadata": {}
+  "conversationHistory": [
+    {
+      "sender": "scammer",
+      "text": "Previous message...",
+      "timestamp": "1739266200000"
+    },
+    {
+      "sender": "user",
+      "text": "Your previous response...",
+      "timestamp": "1739266230000"
+    }
+  ],
+  "metadata": {
+    "channel": "SMS",
+    "language": "English",
+    "locale": "IN"
+  }
 }
 ```
 
-### Response
-
+**Per-turn Response:**
 ```json
 {
   "status": "success",
-  "reply": "Arre... who is this? Beta, my eyes are not good...",
-  "sessionId": "abc123-session-id",
+  "reply": "Arre beta... which department are you from? I want to note down your employee ID."
+}
+```
+
+**Final Output** (submitted async to GUVI after every turn — final call contains full session data):
+```json
+{
+  "sessionId": "uuid-v4-string",
   "scamDetected": true,
-  "scamType": "bank_fraud",
-  "confidenceLevel": 0.95,
-  "totalMessagesExchanged": 2,
-  "engagementDurationSeconds": 0,
+  "totalMessagesExchanged": 18,
+  "engagementDurationSeconds": 345,
   "extractedIntelligence": {
     "phoneNumbers": ["+91-9876543210"],
     "bankAccounts": ["1234567890123456"],
     "upiIds": ["scammer.fraud@fakebank"],
     "phishingLinks": ["http://malicious-site.com"],
-    "emailAddresses": ["scammer@fake.com"]
+    "emailAddresses": ["scammer@fake.com"],
+    "caseIds": ["CASE-5566-XYZ"],
+    "policyNumbers": [],
+    "orderNumbers": []
   },
-  "redFlags": ["Authority Impersonation/Threats", "Credential/OTP Request"],
-  "agentNotes": "Scammer claimed to be from SBI fraud department..."
+  "agentNotes": "Scammer claimed to be from SBI fraud department, used urgency and OTP theft tactics.",
+  "scamType": "bank_fraud",
+  "confidenceLevel": 0.92
 }
 ```
 
----
-
-## Approach
-
-### How Scams Are Detected
-
-Every message is passed through a two-layer detection pipeline:
-
-1. **Regex extraction** (`src/intelligence_extraction.py`) — identifies phone numbers, bank accounts (11–18 digits), UPI handles (`name@bank`), phishing URLs, and email addresses with zero false positives.
-2. **LLM classification** (`src/llm_service.py`) — `gemma-3-4b-it` classifies the scam type (`bank_fraud`, `upi_fraud`, `phishing`, `kyc_fraud`, etc.) and generates agent notes explaining the tactic.
-
-### How Intelligence Is Extracted
-
-| Field | Detection method |
-|-------|-----------------|
-| `phoneNumbers` | Regex: 10-digit Indian numbers, preserves `+91-` prefix |
-| `bankAccounts` | Regex: 11–18 digit sequences |
-| `upiIds` | Regex: `handle@bankname` (no TLD), email false-positives filtered |
-| `phishingLinks` | Regex: `http://` / `https://` / `www.` URLs |
-| `emailAddresses` | Regex: full RFC-style email addresses |
-
-All intelligence is accumulated across the full conversation history, so partial data shared across multiple turns is still captured.
-
-### How Engagement Is Maintained
-
-The honeypot uses a phase-based persona — **Ramesh Kumar, 72-year-old retired government clerk** — with three behavioural phases:
-
-| Phase | Turns | Strategy |
-|-------|-------|----------|
-| **Confusion** | 1–2 | "Who is this beta? Which department?" |
-| **Elicitation** | 3–6 | "What is your employee ID?", asks for scammer's credentials |
-| **Stalling** | 7+ | "OTP not coming", "Link shows 404", "Battery low" |
-
-The LLM is prompted to naturally ask for any intelligence not yet collected (UPI ID, phone, bank account) while staying in character.
+**Error Response (LLM unavailable):**
+```json
+{
+  "status": "error",
+  "message": "LLM service unavailable. Please retry."
+}
+```
+HTTP status: `503 Service Unavailable`
