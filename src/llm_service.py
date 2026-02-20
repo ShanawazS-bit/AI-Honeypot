@@ -10,11 +10,11 @@ from google.genai import types
 class LLMService:
     """
     Gemini-powered LLM service using the new google-genai SDK.
-    Model: gemini-1.5-flash  (gemini-pro is deprecated and returns errors)
+    Model: gemini-1.5-flash (fast, free-tier, always available via standard API keys)
     """
 
-    # Default model — always use this unless overridden by GEMINI_MODEL env var
-    DEFAULT_MODEL = "gemma-3-4b-it"
+    # Default model — gemini-1.5-flash works with all standard Gemini API keys
+    DEFAULT_MODEL = "gemini-1.5-flash"
 
     def __init__(self):
         self.gemini_key  = getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY")
